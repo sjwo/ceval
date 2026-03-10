@@ -89,7 +89,7 @@ x | y:       0xFEEF
 $ echo 'mask = 0xFF
 value = 0x1234
 value & mask' | ceval -b
-mask = 0xFF:     0b11111111
+mask = 0xFF:     0b0000000011111111
 value = 0x1234:  0b0001001000110100
 value & mask:    0b0000000000110100
 

@@ -368,6 +368,23 @@ Examples
 
     if not rows:
         return
+
+    # Re-pad all values to the global max bit-width so place values align.
+    def _bit_width_of(s: str) -> int:
+        if s.startswith(("0b", "0B")):
+            return len(s) - 2
+        if s.startswith(("0x", "0X")):
+            return (len(s) - 2) * 4
+        return 0
+
+    global_width = max(_bit_width_of(v) for _, v in rows if not v.startswith("Error"))
+    if global_width > 0:
+        rows = [
+            (label, _format(int(v, 0), global_width, args.binary)
+                    if not v.startswith("Error") else v)
+            for label, v in rows
+        ]
+
     col = max(len(label) for label, _ in rows)
     for label, value in rows:
         # At least one space after the colon; values left-aligned together.
