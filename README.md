@@ -20,53 +20,12 @@ date: 10 March 2026
 ceval [-b]
 ```
 
-Variables assigned on earlier lines (e.g. `x = 0x1234`) remain in scope for all subsequent lines.  Each output line shows the expression followed by a colon and its value, with values left-aligned across all lines.
-
-### Options
-
 | Flag             | Description                                                        |
 |:-----------------|:-------------------------------------------------------------------|
 | `-b`, `--binary` | Output values in binary (`0b…`) instead of the default hex (`0x…`) |
 
 
-### Bit-width inference
-
-Output values are zero-padded to the bit-width of the widest variable referenced in the expression (or the result's natural width if no variables are referenced).
-
-| Assignment form                  | Inferred width        | Example output |
-|:---------------------------------|:----------------------|:---------------|
-| `x = 0xFF`                       | 8-bit (2 hex digits)  | `0xFF`         |
-| `x = 0xFFFF`                     | 16-bit (4 hex digits) | `0xFFFF`       |
-| `x = 0xFFFFFFFF`                 | 32-bit (8 hex digits) | `0xFFFFFFFF`   |
-| `x = 0x…` (9–16 digits)          | 64-bit                | `0x…`          |
-| `x = 0b…` (1–8 bits)             | 8-bit                 | `0b00000001`   |
-| `x = 0b…` (9–16 bits)            | 16-bit                | `0b…`          |
-| `x = 255` (decimal)              | 32-bit (C `int`)      | `0x000000FF`   |
-| `int x = …`                      | 32-bit (declared)     | 8 hex digits   |
-| `long x = …` / `long long x = …` | 64-bit (declared)     | 16 hex digits  |
-| `uint8_t x = …`                  | 8-bit (declared)      | 2 hex digits   |
-| `uint16_t x = …`                 | 16-bit (declared)     | 4 hex digits   |
-| `uint32_t x = …`                 | 32-bit (declared)     | 8 hex digits   |
-| `uint64_t x = …`                 | 64-bit (declared)     | 16 hex digits  |
-
-
-Reassigning an existing variable preserves its original type.  Use an explicit type declaration (e.g. `int x = …`) to change it.
-
-### Supported syntax
-
-- Integer literals: hex (`0xABCD`), binary (`0b1010`), octal (`0777`), decimal
-- Bitwise: `&  |  ^  ~  <<  >>`
-- Arithmetic: `+  -  *  /  %` (division truncates toward zero, like C)
-- Logical: `&&  ||  !`
-- Comparison: `==  !=  <  >  <=  >=`
-- Compound assignment: `+=  -=  *=  /=  %=  &=  |=  ^=  <<=  >>=`
-- Increment / decrement: `++x  x++  --x  x--`
-- Ternary: `cond ? a : b`
-- Type casts: `(int)expr`, `(unsigned long)expr`, etc. (cast is dropped; value is used as-is)
-- `sizeof(type)`
-- Constants: `true`, `false`, `NULL`, `nullptr`
-- Line comments: `// …`
-- Trailing semicolons are ignored
+Variables assigned on earlier lines (e.g. `x = 0x1234`) remain in scope for all subsequent lines.  Each output line shows the expression followed by a colon and its value, with values left-aligned across all lines.
 
 ### Examples
 
@@ -99,6 +58,45 @@ uint32_t result = 0xDEADBEEF:  0xDEADBEEF
 result >> 16:                  0x0000DEAD
 result & 0xFF:                 0x000000EF
 ```
+
+### Supported syntax
+
+- Integer literals: hex (`0xABCD`), binary (`0b1010`), octal (`0777`), decimal
+- Bitwise: `&  |  ^  ~  <<  >>`
+- Arithmetic: `+  -  *  /  %` (division truncates toward zero, like C)
+- Logical: `&&  ||  !`
+- Comparison: `==  !=  <  >  <=  >=`
+- Compound assignment: `+=  -=  *=  /=  %=  &=  |=  ^=  <<=  >>=`
+- Increment / decrement: `++x  x++  --x  x--`
+- Ternary: `cond ? a : b`
+- Type casts: `(int)expr`, `(unsigned long)expr`, etc. (cast is dropped; value is used as-is)
+- `sizeof(type)`
+- Constants: `true`, `false`, `NULL`, `nullptr`
+- Line comments: `// …`
+- Trailing semicolons are ignored
+
+### Bit-width inference
+
+Output values are zero-padded to the bit-width of the widest variable referenced in the expression (or the result's natural width if no variables are referenced).
+
+| Assignment form                  | Inferred width        | Example output |
+|:---------------------------------|:----------------------|:---------------|
+| `x = 0xFF`                       | 8-bit (2 hex digits)  | `0xFF`         |
+| `x = 0xFFFF`                     | 16-bit (4 hex digits) | `0xFFFF`       |
+| `x = 0xFFFFFFFF`                 | 32-bit (8 hex digits) | `0xFFFFFFFF`   |
+| `x = 0x…` (9–16 digits)          | 64-bit                | `0x…`          |
+| `x = 0b…` (1–8 bits)             | 8-bit                 | `0b00000001`   |
+| `x = 0b…` (9–16 bits)            | 16-bit                | `0b…`          |
+| `x = 255` (decimal)              | 32-bit (C `int`)      | `0x000000FF`   |
+| `int x = …`                      | 32-bit (declared)     | 8 hex digits   |
+| `long x = …` / `long long x = …` | 64-bit (declared)     | 16 hex digits  |
+| `uint8_t x = …`                  | 8-bit (declared)      | 2 hex digits   |
+| `uint16_t x = …`                 | 16-bit (declared)     | 4 hex digits   |
+| `uint32_t x = …`                 | 32-bit (declared)     | 8 hex digits   |
+| `uint64_t x = …`                 | 64-bit (declared)     | 16 hex digits  |
+
+
+Reassigning an existing variable preserves its original type.  Use an explicit type declaration (e.g. `int x = …`) to change it.
 
 ## Installation
 
