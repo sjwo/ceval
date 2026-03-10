@@ -33,27 +33,45 @@ Variables assigned on earlier lines (e.g. `x = 0x1234`) remain in scope for all 
 $ echo 'x = 0xDEAD
 y = 0xBEEF
 x | y' | ceval
+```
+
+```
 x = 0xDEAD:  0xDEAD
 y = 0xBEEF:  0xBEEF
 x | y:       0xFEEF
+```
 
+```
 $ echo 'mask = 0xFF
 value = 0x1234
 value & mask' | ceval -b
+```
+
+```
 mask = 0xFF:     0b0000000011111111
 value = 0x1234:  0b0001001000110100
 value & mask:    0b0000000000110100
+```
 
+```
 $ echo 'a = 3
 b = 5
 a * b + 1' | ceval
+```
+
+```
 a = 3:      0x00000003
 b = 5:      0x00000005
 a * b + 1:  0x00000010
+```
 
+```
 $ echo 'uint32_t result = 0xDEADBEEF
 result >> 16
 result & 0xFF' | ceval
+```
+
+```
 uint32_t result = 0xDEADBEEF:  0xDEADBEEF
 result >> 16:                  0x0000DEAD
 result & 0xFF:                 0x000000EF
