@@ -359,10 +359,19 @@ Examples
     args = ap.parse_args()
 
     variables: dict[str, _Var] = {}
+    rows: list[tuple[str, str]] = []   # (label, value)
     for raw in sys.stdin:
         out = process_line(raw, variables, args.binary)
         if out is not None:
-            print(out)
+            label = re.sub(r"\s*//.*$", "", raw).strip().rstrip(";").strip()
+            rows.append((label, out))
+
+    if not rows:
+        return
+    col = max(len(label) for label, _ in rows)
+    for label, value in rows:
+        # At least one space after the colon; values left-aligned together.
+        print(f"{label}:{' ' * (col - len(label) + 1)} {value}")
 
 
 if __name__ == "__main__":
