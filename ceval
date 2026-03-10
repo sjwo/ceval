@@ -348,10 +348,20 @@ Output is always zero-padded to the bit-width of the widest variable
 referenced in the expression (or the result's natural width if none).
 
 Examples
-  printf 'x = 0xDEAD\\ny = 0xBEEF\\nx | y\\n' | ceval
-  printf 'mask = 0xFF\\nvalue = 0x1234\\nvalue & mask\\n' | ceval -b
-  printf 'a = 3\\nb = 5\\na * b + 1\\n' | ceval
-  printf 'int x = 0xFF\\nx\\n' | ceval
+  echo 'x = 0xDEAD
+y = 0xBEEF
+x | y' | ceval
+
+  echo 'mask = 0xFF
+value = 0x1234
+value & mask' | ceval -b
+
+  echo 'a = 3
+b = 5
+a * b + 1' | ceval
+
+  echo 'int x = 0xFF
+x' | ceval
 """,
     )
     ap.add_argument("-b", "--binary", action="store_true",
