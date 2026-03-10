@@ -14,14 +14,6 @@ author: sjw at cs dot unh dot edu
 
 date: 10 March 2026
 
-## Installation
-
-Download `ceval` and ensure executable:
-
-``` bash
-chmod +x ceval
-```
-
 ## Usage
 
 ```
@@ -106,4 +98,12 @@ result & 0xFF' | ceval
 uint32_t result = 0xDEADBEEF:  0xDEADBEEF
 result >> 16:                  0x0000DEAD
 result & 0xFF:                 0x000000EF
+```
+
+## Installation
+
+Download `ceval` and ensure executable:
+
+``` bash
+chmod +x ceval
 ```
