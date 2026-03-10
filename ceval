@@ -1,0 +1,369 @@
+#!/usr/bin/env python3
+"""ceval — evaluate C expressions from stdin, one per line.
+
+Assignment lines  (e.g. "x = 0x1234")  are stored in scope; subsequent
+lines may reference those variables.  Type and bit-width are inferred from
+the assignment RHS using standard C rules (hex literal digit count, or
+standard int / long-long value thresholds).
+
+Output is zero-padded hex (default) or binary (-b), padded to the bit-width
+of the widest-typed variable referenced in the expression being evaluated.
+
+Supports:
+  - hex / binary / octal / decimal integer literals
+  - C-style type declarations  (int x = 5;  unsigned long y = 0;)
+  - simple and compound assignment  (x = …  x += …  x |= …  etc.)
+  - pre/post increment / decrement  (++x  x--)
+  - bitwise operators  & | ^ ~ << >>
+  - arithmetic  + - * / %   (division truncates toward zero, like C)
+  - logical operators  && || !  (translated to Python and/or/not)
+  - comparison operators  == != < > <= >=
+  - basic type casts  (int)expr  (unsigned long)expr  etc.  (cast is dropped)
+  - sizeof(type)
+  - simple single-level ternary  cond ? a : b
+  - constants  true  false  NULL  nullptr
+  - line comments  // …
+"""
+
+import sys
+import re
+import argparse
+from typing import Optional
+
+# ── bit-width helpers ─────────────────────────────────────────────────────────
+
+_C_TYPE_WIDTHS: dict[str, int] = {
+    "char":     8,
+    "short":    16,
+    "int":      32,
+    "long":     64,   # LP64 (most modern 64-bit systems)
+    "long long": 64,
+    **{f"uint{w}_t": w for w in (8, 16, 32, 64)},
+    **{f"int{w}_t":  w for w in (8, 16, 32, 64)},
+}
+
+
+def _c_type_width(ctype: str) -> int:
+    """Bit width of a C type string (qualifiers stripped)."""
+    key = re.sub(r"\b(unsigned|signed|const|volatile)\b\s*", "", ctype).strip()
+    key = re.sub(r"\s+", " ", key)
+    return _C_TYPE_WIDTHS.get(key, 32)
+
+
+def _hex_literal_width(s: str) -> Optional[int]:
+    """Infer bit width from a hex literal by digit count."""
+    m = re.fullmatch(r"0[xX]([0-9a-fA-F]+)[uUlL]*", s.strip())
+    if not m:
+        return None
+    nd = len(m.group(1))          # total hex digits (leading zeros count)
+    if nd <= 2:   return 8
+    if nd <= 4:   return 16
+    if nd <= 8:   return 32
+    return 64
+
+
+def _bin_literal_width(s: str) -> Optional[int]:
+    """Infer bit width from a binary literal by digit count."""
+    m = re.fullmatch(r"0[bB]([01]+)[uUlL]*", s.strip())
+    if not m:
+        return None
+    nb = len(m.group(1))
+    if nb <= 8:   return 8
+    if nb <= 16:  return 16
+    if nb <= 32:  return 32
+    return 64
+
+
+def _value_width(v: int) -> int:
+    """Minimum standard C integer type width that fits value v."""
+    if v < 0:
+        return 32 if v >= -(1 << 31) else 64
+    if v < (1 << 31): return 32   # int
+    if v < (1 << 32): return 32   # unsigned int
+    return 64                      # long long / unsigned long long
+
+
+def _rhs_literal_width(rhs: str) -> Optional[int]:
+    """If rhs is a bare literal, return its implied bit width."""
+    s = rhs.strip()
+    return _hex_literal_width(s) or _bin_literal_width(s)
+
+
+# ── C → Python expression translation ────────────────────────────────────────
+
+_CAST_RE = re.compile(
+    r"\(\s*(?:(?:unsigned|signed|const)\s+)*"
+    r"(?:long\s+long|long|int|short|char)"
+    r"(?:\s*\*\s*)?\s*\)"
+)
+
+_SIZEOF_RE = re.compile(
+    r"sizeof\s*\(\s*"
+    r"((?:(?:unsigned|signed)\s+)?(?:long\s+long|long|int|short|char"
+    r"|uint\d+_t|int\d+_t))"
+    r"\s*\)"
+)
+_SIZEOF_BYTES: dict[str, int] = {
+    "char": 1, "short": 2, "int": 4, "long": 8, "long long": 8,
+    **{f"uint{w}_t": w // 8 for w in (8, 16, 32, 64)},
+    **{f"int{w}_t":  w // 8 for w in (8, 16, 32, 64)},
+}
+
+
+def _sizeof_sub(m: re.Match) -> str:
+    key = re.sub(r"\s+", " ", m.group(1)).strip().lower()
+    key = re.sub(r"\b(unsigned|signed)\b\s*", "", key).strip()
+    return str(_SIZEOF_BYTES.get(key, 4))
+
+
+def c_to_python(expr: str) -> str:
+    """Best-effort translation of a C expression to Python."""
+    s = expr.strip().rstrip(";")
+    # Strip line comments
+    s = re.sub(r"\s*//.*$", "", s)
+    # sizeof
+    s = _SIZEOF_RE.sub(_sizeof_sub, s)
+    # Type casts  — just drop them (values are already Python ints)
+    s = _CAST_RE.sub("", s)
+    # Simple single-level ternary:  cond ? a : b  →  (a) if (cond) else (b)
+    # Only attempt if unambiguous (single ? and : outside parens is too hard to
+    # handle generically with regex; this covers the common shallow case).
+    if s.count("?") == 1:
+        m = re.match(r"^(.*?)\?(.+?):(.+)$", s, re.DOTALL)
+        if m:
+            s = (f"({m.group(2).strip()}) if ({m.group(1).strip()})"
+                 f" else ({m.group(3).strip()})")
+    # Logical operators
+    s = re.sub(r"&&", " and ", s)
+    s = re.sub(r"\|\|", " or ", s)
+    # Logical not  !expr  →  not expr  (avoid touching !=)
+    s = re.sub(r"(?<![!<>=&|^])!(?!=)", " not ", s)
+    return s
+
+
+# ── variable store ────────────────────────────────────────────────────────────
+
+class _Var:
+    __slots__ = ("value", "width")
+    def __init__(self, value: int, width: int) -> None:
+        self.value = value
+        self.width = width   # bit width
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+_SAFE_BUILTINS: dict = {}
+_CONSTANTS = {"true": 1, "false": 0, "NULL": 0, "nullptr": 0}
+
+
+def _ns(variables: dict[str, _Var]) -> dict:
+    ns = {n: v.value for n, v in variables.items()}
+    ns.update(_CONSTANTS)
+    return ns
+
+
+def _eval(py_expr: str, ns: dict) -> int:
+    result = eval(py_expr, {"__builtins__": _SAFE_BUILTINS}, ns)  # noqa: S307
+    if isinstance(result, bool):
+        return int(result)
+    if not isinstance(result, int):
+        raise TypeError(f"non-integer result: {type(result).__name__}")
+    return result
+
+
+def _vars_in(expr: str, variables: dict[str, _Var]) -> list[str]:
+    """Variable names from our scope that appear in expr."""
+    tokens = set(re.findall(r"\b([a-zA-Z_]\w*)\b", expr))
+    return [t for t in tokens if t in variables]
+
+
+def _format(value: int, width: int, binary: bool) -> str:
+    """Format value zero-padded to width bits (hex or binary)."""
+    masked = value & ((1 << width) - 1)
+    if binary:
+        return "0b" + format(masked, f"0{width}b")
+    hex_digits = (width + 3) // 4
+    return "0x" + format(masked, f"0{hex_digits}X")
+
+
+def _c_div(a: int, b: int) -> int:
+    """Integer division truncating toward zero (C semantics)."""
+    if b == 0:
+        raise ZeroDivisionError("division by zero")
+    # Python // floors toward -inf; C truncates toward 0
+    q, r = divmod(a, b)
+    if r != 0 and (a < 0) != (b < 0):
+        q += 1
+    return q
+
+
+# ── line patterns ─────────────────────────────────────────────────────────────
+
+# Optional leading C type: "int ", "unsigned long long ", "uint32_t ", …
+_TYPE_PFX = re.compile(
+    r"^((?:(?:unsigned|signed|const|volatile)\s+)*"
+    r"(?:long\s+long|long|int|short|char|uint\d+_t|int\d+_t))\s+"
+)
+# Simple assignment  name = expr  (but not ==, +=, …)
+_ASSIGN = re.compile(r"^([a-zA-Z_]\w*)\s*=(?![=])\s*(.+)$", re.DOTALL)
+# Compound assignment  name op= expr
+_COMPOUND = re.compile(
+    r"^([a-zA-Z_]\w*)\s*([+\-*/%&|^]|<<|>>)=\s*(.+)$", re.DOTALL
+)
+# Pre-increment / decrement  ++x  --x
+_PRE_INCDEC = re.compile(r"^(\+\+|--)([a-zA-Z_]\w*)$")
+# Post-increment / decrement  x++  x--
+_POST_INCDEC = re.compile(r"^([a-zA-Z_]\w*)(\+\+|--)$")
+
+
+# ── main processing ───────────────────────────────────────────────────────────
+
+def process_line(
+    raw: str,
+    variables: dict[str, _Var],
+    binary: bool,
+) -> Optional[str]:
+    """Process one input line; return formatted output string or None."""
+    # Strip line comments then surrounding whitespace / semicolons
+    line = re.sub(r"\s*//.*$", "", raw).strip().rstrip(";").strip()
+    if not line or line.startswith("#"):
+        return None
+
+    # Peel off optional leading C type declaration ("int x = …")
+    declared_ctype: Optional[str] = None
+    m = _TYPE_PFX.match(line)
+    if m:
+        raw_type = re.sub(r"\s+", " ", m.group(1)).strip().lower()
+        declared_ctype = re.sub(r"\b(const|volatile)\b\s*", "", raw_type).strip()
+        line = line[m.end():]
+
+    # ── pre-increment / decrement  ++x  --x ──────────────────────────────────
+    m = _PRE_INCDEC.match(line)
+    if m:
+        op, varname = m.group(1), m.group(2)
+        if varname not in variables:
+            return f"Error: undefined variable '{varname}'"
+        delta = 1 if op == "++" else -1
+        v = variables[varname]
+        result = v.value + delta
+        variables[varname] = _Var(result, v.width)
+        return _format(result, v.width, binary)
+
+    # ── post-increment / decrement  x++  x-- ─────────────────────────────────
+    m = _POST_INCDEC.match(line)
+    if m:
+        varname, op = m.group(1), m.group(2)
+        if varname not in variables:
+            return f"Error: undefined variable '{varname}'"
+        delta = 1 if op == "++" else -1
+        v = variables[varname]
+        result = v.value + delta
+        variables[varname] = _Var(result, v.width)
+        return _format(result, v.width, binary)
+
+    # ── compound assignment  x op= expr ──────────────────────────────────────
+    m = _COMPOUND.match(line)
+    if m:
+        varname, op, rhs = m.group(1), m.group(2), m.group(3).strip()
+        if varname not in variables:
+            return f"Error: undefined variable '{varname}'"
+        ns = _ns(variables)
+        try:
+            rhs_val = _eval(c_to_python(rhs), ns)
+        except Exception as e:
+            return f"Error: {e}"
+        old = variables[varname].value
+        var_w = variables[varname].width
+        op_result: int
+        match op:
+            case "+":   op_result = old + rhs_val
+            case "-":   op_result = old - rhs_val
+            case "*":   op_result = old * rhs_val
+            case "/":   op_result = _c_div(old, rhs_val)
+            case "%":   op_result = old % rhs_val
+            case "&":   op_result = old & rhs_val
+            case "|":   op_result = old | rhs_val
+            case "^":   op_result = old ^ rhs_val
+            case "<<":  op_result = old << rhs_val
+            case ">>":  op_result = old >> rhs_val
+            case _:
+                return f"Error: unknown operator '{op}='"
+        ref_vars = _vars_in(rhs, variables)
+        out_width = max([var_w] + [variables[v].width for v in ref_vars])
+        variables[varname] = _Var(op_result, var_w)
+        return _format(op_result, out_width, binary)
+
+    # ── simple assignment  [type] name = expr ─────────────────────────────────
+    m = _ASSIGN.match(line)
+    if m:
+        varname, rhs = m.group(1), m.group(2).strip()
+        ns = _ns(variables)
+        try:
+            result = _eval(c_to_python(rhs), ns)
+        except Exception as e:
+            return f"Error: {e}"
+
+        # Variable bit-width: declared type > preserved existing > literal > value
+        if declared_ctype:
+            var_width = _c_type_width(declared_ctype)
+        elif varname in variables:
+            var_width = variables[varname].width   # reassignment keeps same type
+        else:
+            var_width = _rhs_literal_width(rhs) or _value_width(result)
+
+        # Output width: widest of new var and any vars referenced in rhs
+        ref_vars = _vars_in(rhs, variables)
+        out_width = max([var_width] + [variables[v].width for v in ref_vars])
+
+        variables[varname] = _Var(result, var_width)
+        return _format(result, out_width, binary)
+
+    # ── bare expression ───────────────────────────────────────────────────────
+    ns = _ns(variables)
+    try:
+        result = _eval(c_to_python(line), ns)
+    except Exception as e:
+        return f"Error: {e}"
+    ref_vars = _vars_in(line, variables)
+    width = (max(variables[v].width for v in ref_vars)
+             if ref_vars else _value_width(result))
+    return _format(result, width, binary)
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        prog="ceval",
+        description="Evaluate C expressions from stdin, one per line.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Bit-width inference
+  hex literals  0xFF→8b  0xFFFF→16b  0xFFFFFFFF→32b  0x…(9-16 digits)→64b
+  bin literals  0b1→8b   (same doubling thresholds)
+  decimal / bare expr    standard C int (32b) / long long (64b)
+  declared type          int→32b  long/long long→64b  uint8_t→8b  etc.
+
+Output is always zero-padded to the bit-width of the widest variable
+referenced in the expression (or the result's natural width if none).
+
+Examples
+  printf 'x = 0xDEAD\\ny = 0xBEEF\\nx | y\\n' | ceval
+  printf 'mask = 0xFF\\nvalue = 0x1234\\nvalue & mask\\n' | ceval -b
+  printf 'a = 3\\nb = 5\\na * b + 1\\n' | ceval
+  printf 'int x = 0xFF\\nx\\n' | ceval
+""",
+    )
+    ap.add_argument("-b", "--binary", action="store_true",
+                    help="output in binary (default: hex)")
+    args = ap.parse_args()
+
+    variables: dict[str, _Var] = {}
+    for raw in sys.stdin:
+        out = process_line(raw, variables, args.binary)
+        if out is not None:
+            print(out)
+
+
+if __name__ == "__main__":
+    main()
